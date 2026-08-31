@@ -351,12 +351,19 @@ function draw(): void {
   ctx.restore();
 
   ctx.fillStyle = palette.text;
-  ctx.font = "16px ui-monospace, monospace";
   ctx.textAlign = "right";
-  ctx.fillText(String(Math.floor(distance)), width - 16, 28);
+  ctx.font = "10px ui-monospace, monospace";
+  ctx.globalAlpha = 0.6;
+  ctx.fillText("SCORE", width - 16, 14);
+  ctx.globalAlpha = 1;
+  ctx.font = "16px ui-monospace, monospace";
+  ctx.fillText(String(Math.floor(distance)), width - 16, 32);
   if (best > 0) {
+    ctx.font = "10px ui-monospace, monospace";
     ctx.globalAlpha = 0.5;
-    ctx.fillText(String(best), width - 16, 48);
+    ctx.fillText("BEST", width - 16, 50);
+    ctx.font = "16px ui-monospace, monospace";
+    ctx.fillText(String(best), width - 16, 68);
     ctx.globalAlpha = 1;
   }
 }
