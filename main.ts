@@ -1,4 +1,12 @@
-import { rectsOverlap, rescaleObstacleX, tryJump, type Rect } from "./game-logic.ts";
+import {
+  effectiveSpeed,
+  nextTheme,
+  rectsOverlap,
+  rescaleObstacleX,
+  tryJump,
+  type GadgetKind,
+  type Rect,
+} from "./game-logic.ts";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#game")!;
 const ctx = canvas.getContext("2d")!;
@@ -22,6 +30,20 @@ const TALL_MIN_HEIGHT = 145;
 const TALL_MAX_HEIGHT = 165;
 const TALL_AFTER_COUNT = 2;
 const TALL_CHANCE = 0.35;
+const GADGET_SIZE = 20;
+const GADGET_EVERY = 3;
+const GADGET_FLOAT_HEIGHT = 95;
+const GADGET_LEAD = 130;
+const SLOW_DURATION = 4;
+const SLOW_FACTOR = 0.55;
+
+// Each "destination": background, ground line, obstacle and text colour.
+const THEMES = [
+  { bg: "#e8e4da", ground: "#3a3a3a", obstacle: "#3a3a3a", text: "#3a3a3a" },
+  { bg: "#dfeee6", ground: "#1f5c46", obstacle: "#1f5c46", text: "#1f5c46" },
+  { bg: "#f3e6d8", ground: "#7a3b1e", obstacle: "#7a3b1e", text: "#7a3b1e" },
+  { bg: "#e3e6f5", ground: "#2f3a7a", obstacle: "#2f3a7a", text: "#2f3a7a" },
+];
 
 type Phase = "idle" | "running" | "over";
 
@@ -32,6 +54,11 @@ interface Obstacle {
   tall: boolean;
 }
 
+interface Gadget {
+  x: number;
+  kind: GadgetKind;
+}
+
 let width = 0;
 let height = 0;
 let groundY = 0;
@@ -40,9 +67,12 @@ let phase: Phase = "idle";
 let playerY = 0;
 let velocityY = 0;
 let obstacles: Obstacle[] = [];
+let gadgets: Gadget[] = [];
 let speed = BASE_SPEED;
 let distance = 0;
 let best = readBest();
+let slowTimer = 0;
+let theme = 0;
 
 function readBest(): number {
   try {
@@ -81,11 +111,25 @@ function resize(): void {
 }
 
 function playerRect(): Rect {
-  return { x: Math.max(40, width * 0.12), y: playerY, w: PLAYER_SIZE, h: PLAYER_SIZE };
+  return {
+    x: Math.max(40, width * 0.12),
+    y: playerY,
+    w: PLAYER_SIZE,
+    h: PLAYER_SIZE,
+  };
 }
 
 function obstacleRect(o: Obstacle): Rect {
   return { x: o.x, y: groundY - o.h, w: o.w, h: o.h };
+}
+
+function gadgetRect(g: Gadget): Rect {
+  return {
+    x: g.x,
+    y: groundY - GADGET_FLOAT_HEIGHT,
+    w: GADGET_SIZE,
+    h: GADGET_SIZE,
+  };
 }
 
 function startRun(): void {
@@ -94,9 +138,12 @@ function startRun(): void {
   velocityY = JUMP_VELOCITY;
   jumpsUsed = 1; // the launching press is jump 1
   obstacles = [];
+  gadgets = [];
   obstaclesSpawned = 0;
   distance = 0;
   speed = BASE_SPEED;
+  slowTimer = 0;
+  theme = 0;
   sinceLastSpawn = 0;
   nextGap = randomGap();
 }
@@ -107,6 +154,8 @@ function resetToIdle(): void {
   velocityY = 0;
   jumpsUsed = 0;
   obstacles = [];
+  gadgets = [];
+  slowTimer = 0;
   fallRotation = 0;
   distance = 0;
   status.textContent = "";
@@ -150,21 +199,32 @@ function update(dt: number, now: number): void {
       velocityY = 0;
       jumpsUsed = 0;
     }
+    if (slowTimer > 0) slowTimer = Math.max(0, slowTimer - dt);
+    const moveSpeed = effectiveSpeed(speed, slowTimer > 0, SLOW_FACTOR);
+
     speed += SPEED_RAMP * dt;
-    distance += speed * dt * 0.05;
+    distance += moveSpeed * dt * 0.05;
     sinceLastSpawn += dt;
-    if (sinceLastSpawn * speed >= nextGap) {
+    if (sinceLastSpawn * moveSpeed >= nextGap) {
       sinceLastSpawn = 0;
       nextGap = randomGap();
       obstaclesSpawned += 1;
-      const tall = obstaclesSpawned > TALL_AFTER_COUNT && Math.random() < TALL_CHANCE;
+      const tall =
+        obstaclesSpawned > TALL_AFTER_COUNT && Math.random() < TALL_CHANCE;
       const h = tall
         ? TALL_MIN_HEIGHT + Math.random() * (TALL_MAX_HEIGHT - TALL_MIN_HEIGHT)
-        : SHORT_MIN_HEIGHT + Math.random() * (SHORT_MAX_HEIGHT - SHORT_MIN_HEIGHT);
+        : SHORT_MIN_HEIGHT +
+          Math.random() * (SHORT_MAX_HEIGHT - SHORT_MIN_HEIGHT);
       obstacles.push({ x: width + 20, w: 22, h, tall });
+      if (obstaclesSpawned % GADGET_EVERY === 0) {
+        const kind: GadgetKind = Math.random() < 0.5 ? "slow" : "theme";
+        gadgets.push({ x: width + 20 + GADGET_LEAD, kind });
+      }
     }
-    for (const o of obstacles) o.x -= speed * dt;
+    for (const o of obstacles) o.x -= moveSpeed * dt;
     obstacles = obstacles.filter((o) => o.x + o.w > -10);
+    for (const g of gadgets) g.x -= moveSpeed * dt;
+    gadgets = gadgets.filter((g) => g.x + GADGET_SIZE > -10);
 
     const p = playerRect();
     for (const o of obstacles) {
@@ -173,6 +233,12 @@ function update(dt: number, now: number): void {
         break;
       }
     }
+    gadgets = gadgets.filter((g) => {
+      if (!rectsOverlap(p, gadgetRect(g))) return true;
+      if (g.kind === "slow") slowTimer = SLOW_DURATION;
+      else theme = nextTheme(theme, THEMES.length);
+      return false;
+    });
   } else if (phase === "over") {
     resetTimer -= dt;
     fallRotation = Math.min(Math.PI / 2, fallRotation + dt * 6);
@@ -182,12 +248,13 @@ function update(dt: number, now: number): void {
 }
 
 function draw(): void {
+  const palette = THEMES[theme];
   ctx.clearRect(0, 0, width, height);
 
-  ctx.fillStyle = "#e8e4da";
+  ctx.fillStyle = palette.bg;
   ctx.fillRect(0, 0, width, height);
 
-  ctx.strokeStyle = "#3a3a3a";
+  ctx.strokeStyle = palette.ground;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(0, groundY);
@@ -195,13 +262,25 @@ function draw(): void {
   ctx.stroke();
 
   for (const o of obstacles) {
-    ctx.fillStyle = o.tall ? "#2f5d8a" : "#3a3a3a";
+    ctx.fillStyle = o.tall ? "#2f5d8a" : palette.obstacle;
     ctx.fillRect(o.x, groundY - o.h, o.w, o.h);
+  }
+  for (const g of gadgets) {
+    const r = gadgetRect(g);
+    ctx.fillStyle = g.kind === "slow" ? "#c9962f" : "#2fb8a3";
+    ctx.beginPath();
+    ctx.arc(r.x + r.w / 2, r.y + r.h / 2, r.w / 2, 0, Math.PI * 2);
+    ctx.fill();
   }
   if (phase === "idle") {
     const iw = 22;
-    ctx.fillStyle = "#3a3a3a";
-    ctx.fillRect(width * IDLE_OBSTACLE_RATIO, groundY - IDLE_OBSTACLE_HEIGHT, iw, IDLE_OBSTACLE_HEIGHT);
+    ctx.fillStyle = palette.obstacle;
+    ctx.fillRect(
+      width * IDLE_OBSTACLE_RATIO,
+      groundY - IDLE_OBSTACLE_HEIGHT,
+      iw,
+      IDLE_OBSTACLE_HEIGHT,
+    );
   }
 
   const p = playerRect();
@@ -222,7 +301,7 @@ function draw(): void {
   ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
   ctx.restore();
 
-  ctx.fillStyle = "#3a3a3a";
+  ctx.fillStyle = palette.text;
   ctx.font = "16px ui-monospace, monospace";
   ctx.textAlign = "right";
   ctx.fillText(String(Math.floor(distance)), width - 16, 28);
@@ -249,7 +328,12 @@ function onInput(e: Event): void {
 window.addEventListener("keydown", (e) => {
   if (e.code !== "Space" && e.code !== "ArrowUp" && e.code !== "Enter") return;
   const active = document.activeElement;
-  if (active instanceof HTMLElement && active !== canvas && active !== document.body) return;
+  if (
+    active instanceof HTMLElement &&
+    active !== canvas &&
+    active !== document.body
+  )
+    return;
   onInput(e);
 });
 canvas.addEventListener("pointerdown", onInput);
