@@ -14,7 +14,7 @@ const status = document.querySelector<HTMLElement>("#status")!;
 
 const GROUND_RATIO = 0.72;
 const GRAVITY = 2200;
-const JUMP_VELOCITY = -760;
+const JUMP_VELOCITY = -830;
 const PLAYER_SIZE = 30;
 const BASE_SPEED = 300;
 const SPEED_RAMP = 5;
@@ -91,6 +91,51 @@ let obstaclesSpawned = 0;
 
 function randomGap(): number {
   return MIN_GAP + Math.random() * (MAX_GAP - MIN_GAP);
+}
+
+// Synthesised, so a static site ships zero audio assets. Created lazily on
+// the first jump (always a user gesture) since autoplay policies block an
+// AudioContext started any earlier.
+let audioCtx: AudioContext | null = null;
+
+function tone(
+  freq: number,
+  duration: number,
+  type: OscillatorType,
+  gain: number,
+  delay = 0,
+): void {
+  if (!audioCtx) audioCtx = new AudioContext();
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  const start = audioCtx.currentTime + delay;
+  const osc = audioCtx.createOscillator();
+  const env = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  env.gain.setValueAtTime(0, start);
+  env.gain.linearRampToValueAtTime(gain, start + 0.01);
+  env.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+  osc.connect(env);
+  env.connect(audioCtx.destination);
+  osc.start(start);
+  osc.stop(start + duration);
+}
+
+function playJumpSound(isDoubleJump: boolean): void {
+  tone(isDoubleJump ? 660 : 440, 0.1, "square", 0.1);
+}
+
+function playGadgetSound(kind: GadgetKind): void {
+  if (kind === "slow") {
+    tone(320, 0.22, "triangle", 0.14);
+  } else {
+    tone(523.25, 0.09, "sine", 0.12);
+    tone(783.99, 0.14, "sine", 0.12, 0.09);
+  }
+}
+
+function playGameOverSound(): void {
+  tone(180, 0.3, "sawtooth", 0.12);
 }
 
 function resize(): void {
@@ -172,11 +217,13 @@ function endRun(): void {
     // round still ends and the best score still shows for this session.
   }
   status.textContent = `${Math.floor(distance)}. Best ${best}.`;
+  playGameOverSound();
 }
 
 function jump(): void {
   if (phase === "idle") {
     startRun();
+    playJumpSound(false);
     return;
   }
   if (phase === "over") {
@@ -187,6 +234,7 @@ function jump(): void {
   jumpsUsed = result.jumpsUsed;
   if (result.allowed) {
     velocityY = JUMP_VELOCITY;
+    playJumpSound(result.jumpsUsed === MAX_JUMPS);
   }
 }
 
@@ -237,6 +285,7 @@ function update(dt: number, now: number): void {
       if (!rectsOverlap(p, gadgetRect(g))) return true;
       if (g.kind === "slow") slowTimer = SLOW_DURATION;
       else theme = nextTheme(theme, THEMES.length);
+      playGadgetSound(g.kind);
       return false;
     });
   } else if (phase === "over") {
